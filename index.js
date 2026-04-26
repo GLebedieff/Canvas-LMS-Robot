@@ -22,7 +22,7 @@ async function sincronizar() {
         
         for (const coursePage of coursesRes.results) {
             // Ajuste o nome 'ID' abaixo para o nome exato da coluna de ID na sua tabela Courses
-            const canvasCourseId = coursePage.properties['ID']?.number || coursePage.properties['ID']?.title[0]?.plain_text;
+            const canvasCourseId = coursePage.properties['Course Code']?.number || coursePage.properties['ID']?.title[0]?.plain_text;
             const notionCoursePageId = coursePage.id;
             const courseName = coursePage.properties['Name']?.title[0]?.plain_text;
 
