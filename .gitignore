@@ -1,0 +1,5 @@
+# Chaves Secretas e Variáveis de Ambiente (CRÍTICO: NUNCA SUBIR)
+.env
+
+# Pastas de dependências (O GitHub Actions instala isso sozinho lá na nuvem)
+node_modules/
