@@ -22,9 +22,10 @@ async function sincronizar() {
         
         for (const coursePage of coursesRes.results) {
             // Ajuste o nome 'ID' abaixo para o nome exato da coluna de ID na sua tabela Courses
-            const canvasCourseId = coursePage.properties['Course Code']?.number || coursePage.properties['ID']?.title[0]?.plain_text;
+            const canvasCourseId = coursePage.properties['Course Code']?.number || coursePage.properties['Course Code']?.rich_text?.[0]?.plain_text || coursePage.properties['Course Code']?.title?.[0]?.plain_text;
             const notionCoursePageId = coursePage.id;
-            const courseName = coursePage.properties['Name']?.title[0]?.plain_text;
+            const titleColumn = Object.keys(coursePage.properties).find(key => coursePage.properties[key].type === 'title');
+            const courseName = titleColumn ? coursePage.properties[titleColumn]?.title[0]?.plain_text : 'Matéria Sem Nome';
 
             if (!canvasCourseId) continue;
 
@@ -39,7 +40,7 @@ async function sincronizar() {
                 const existingTask = await notion.databases.query({
                     database_id: ASSIGNMENTS_DB_ID,
                     filter: {
-                        property: 'Canvas ID',
+                        property: 'CanvasID ',
                         rich_text: { equals: task.id.toString() }
                     }
                 });
@@ -54,7 +55,7 @@ async function sincronizar() {
                             'Assignment Name': {
                                 title: [{ text: { content: task.name } }]
                             },
-                            'Canvas ID': {
+                            'CanvasID ': {
                                 rich_text: [{ text: { content: task.id.toString() } }]
                             },
                             'Deadline': task.due_at ? {
