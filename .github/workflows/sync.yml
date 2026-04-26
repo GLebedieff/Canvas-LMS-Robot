@@ -2,7 +2,7 @@ name: Canvas to Notion Sync
 
 on:
   schedule:
-    - cron: '0 9,21 * * *' # Roda às 06:00 e 18:00 (horário de Brasília aprox.)
+    - cron: '0 * * * *' # Roda a cada 1 hora
   workflow_dispatch:
 
 jobs:
