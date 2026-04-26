@@ -32,10 +32,16 @@ async function sincronizar() {
             console.log(`\n📚 Verificando: ${courseName} (ID: ${canvasCourseId})`);
 
             // 2. Buscar tarefas no Canvas para este curso
-            const canvasRes = await canvas.get(`/courses/${canvasCourseId}/assignments`);
+            const canvasRes = await canvas.get(`/courses/${canvasCourseId}/assignments?include[]=submission`);
             const assignments = canvasRes.data;
 
+            const hoje = new Date();
+
             for (const task of assignments) {
+                if (new Date(task.due_at) < hoje){
+                    continue;
+                }
+
                 // 3. Verificar se a tarefa já existe no Notion (pelo Canvas ID)
                 const existingTask = await notion.databases.query({
                     database_id: ASSIGNMENTS_DB_ID,
@@ -44,6 +50,8 @@ async function sincronizar() {
                         rich_text: { equals: task.id.toString() }
                     }
                 });
+
+                const foiEntregue = task.submission && task.submission.workflow_state !== 'unsubmitted';
 
                 if (existingTask.results.length === 0) {
                     console.log(`✨ Nova tarefa encontrada: ${task.name}`);
@@ -63,9 +71,27 @@ async function sincronizar() {
                             } : undefined,
                             'Courses': {
                                 relation: [{ id: notionCoursePageId }]
+                            },
+                            'Done': { 
+                                checkbox: foiEntregue 
                             }
                         }
                     });
+                } else {
+                    const pageIdNotion = existingTask.results[0].id;
+                    const jaEstavaConcluidaNoNotion = existingTask.results[0].properties['Concluído']?.checkbox;
+
+                    // Se foi entregue no Canvas, mas ainda está desmarcada no Notion:
+                    if (foiEntregue && !jaEstavaConcluidaNoNotion) {
+                        console.log(`✅ Marcando tarefa como concluída no Notion: ${task.name}`);
+                        
+                        await notion.pages.update({
+                            page_id: pageIdNotion,
+                            properties: {
+                                'Done': { checkbox: true }
+                            }
+                        });
+                    }
                 }
             }
         }
