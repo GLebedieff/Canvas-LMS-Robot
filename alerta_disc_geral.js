@@ -5,8 +5,6 @@ const axios = require('axios');
 const CANVAS_TOKEN = process.env.CANVAS_TOKEN;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// A API de avisos do Canvas exige que você passe os códigos das matérias assim:
-// Se quiser adicionar mais, é só colocar vírgula (ex: 'course_64033', 'course_62337')
 const MATERIAS = ['course_64033', 'course_64035', 'course_64032', 'course_62337', 'course_64098', 'course_64034']; 
 
 const canvas = axios.create({

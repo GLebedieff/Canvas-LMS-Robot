@@ -13,6 +13,45 @@ const canvas = axios.create({
 const COURSES_DB_ID = '62c1660340a283ca8d5b0163355d4df4'; 
 const ASSIGNMENTS_DB_ID = process.env.NOTION_ASSIGNMENTS_DB_ID;
 
+const CANAIS_DISCORD = {
+    '62337': process.env.DISCORD_ATIVIDADE_FILOSOFIA,
+    '64033': process.env.DISCORD_ATIVIDADE_EXP_CRIATIVA,
+    '64034': process.env.DISOCRD_ATIVIDADE_SEGURANCA,
+    '64098': process.env.DISCORD_ATIVIDADE_POO,
+    '64035': process.env.DISCORD_ATIVIDADE_PERFORMANCE,
+    '64032': process.env.DISCORD_ATIVIDADE_CRIACAO_MODELOS
+};
+
+async function enviarTarefaAoDiscord(task, courseName, courseId, notionPageUrl) {
+    // Busca a URL específica para essa matéria
+    const webhookUrl = CANAIS_DISCORD[courseId.toString()];
+
+    if (!webhookUrl) {
+        console.log(`⚠️ Aviso: Sem canal de Discord configurado para a matéria ID ${courseId}`);
+        return;
+    }
+
+    const dataFormatada = task.due_at 
+        ? new Date(task.due_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) 
+        : 'Sem prazo fixado';
+
+    const payload = {
+        content: `📝 **NOVA ATIVIDADE DETECTADA** 📝\n\n` +
+                `**Matéria:** ${courseName}\n` +
+                `**Tarefa:** ${task.name}\n` +
+                `**Prazo de Entrega:** ${dataFormatada}\n` +
+                `**Link do Canvas:** ${task.html_url}\n` +
+                `**Link do Notion:** ${notionPageUrl}`
+    };
+
+    try {
+        await axios.post(webhookUrl, payload);
+        console.log(`🚀 Notificação enviada para o canal de ${courseName}`);
+    } catch (err) {
+        console.error(`❌ Erro no Webhook de ${courseName}:`, err.message);
+    }
+}
+
 async function sincronizar() {
     try {
         console.log('🚀 Iniciando sincronização...');
@@ -57,7 +96,7 @@ async function sincronizar() {
                     console.log(`✨ Nova tarefa encontrada: ${task.name}`);
 
                     // 4. Criar a tarefa no Notion vinculando ao curso
-                    await notion.pages.create({
+                    const newNotionPage = await notion.pages.create({
                         parent: { database_id: ASSIGNMENTS_DB_ID },
                         properties: {
                             'Assignment Name': {
@@ -74,9 +113,12 @@ async function sincronizar() {
                             },
                             'Done': { 
                                 checkbox: foiEntregue 
-                            }
+                            },
+                            'URL': { url: task.html_url }
                         }
                     });
+                    const notionPageUrl = newNotionPage.url;
+                    await enviarTarefaAoDiscord(task, courseName, canvasCourseId, notionPageUrl);
                 } else {
                     const pageIdNotion = existingTask.results[0].id;
                     const jaEstavaConcluidaNoNotion = existingTask.results[0].properties['Concluído']?.checkbox;
