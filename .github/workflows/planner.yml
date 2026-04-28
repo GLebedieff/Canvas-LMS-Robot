@@ -1,12 +1,13 @@
-name: Canvas to Notion Sync
+name: Daily Study Planner
 
 on:
   schedule:
-    - cron: '0 * * * *' # Roda a cada 1 hora
+    # Roda diariamente às 6h da manhã (BRT = UTC-3, logo 09:00 UTC)
+    - cron: '0 9 * * *'
   workflow_dispatch:
 
 jobs:
-  build:
+  planner:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,19 +18,27 @@ jobs:
       - run: node index.js
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
           NOTION_ASSIGNMENTS_DB_ID: ${{ secrets.NOTION_ASSIGNMENTS_DB_ID }}
           NOTION_MATERIAIS_AULA_DB_ID: ${{ secrets.NOTION_MATERIAIS_AULA_DB_ID }}
           NOTION_HORARIO_DB_ID: ${{ secrets.NOTION_HORARIO_DB_ID }}
           NOTION_PLANNER_DB_ID: ${{ secrets.NOTION_PLANNER_DB_ID }}
           NOTION_TODO_DB_ID: ${{ secrets.NOTION_TODO_DB_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+          NOTION_ATIVIDADES_DB_ID: ${{ secrets.NOTION_ATIVIDADES_DB_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DISCORD_ATIVIDADE_EXP_CRIATIVA: ${{ secrets.DISCORD_ATIVIDADE_EXP_CRIATIVA }}
           DISCORD_ATIVIDADE_PERFORMANCE: ${{ secrets.DISCORD_ATIVIDADE_PERFORMANCE }}
           DISCORD_ATIVIDADE_CRIACAO_MODELOS: ${{ secrets.DISCORD_ATIVIDADE_CRIACAO_MODELOS }}
           DISCORD_ATIVIDADE_FILOSOFIA: ${{ secrets.DISCORD_ATIVIDADE_FILOSOFIA }}
           DISCORD_ATIVIDADE_POO: ${{ secrets.DISCORD_ATIVIDADE_POO }}
           DISCORD_ATIVIDADE_SEGURANCA: ${{ secrets.DISCORD_ATIVIDADE_SEGURANCA }}
+          DISCORD_REPOSITORIO_EXP_CRIATIVA: ${{ secrets.DISCORD_REPOSITORIO_EXP_CRIATIVA }}
+          DISCORD_REPOSITORIO_PERFORMANCE: ${{ secrets.DISCORD_REPOSITORIO_PERFORMANCE }}
+          DISCORD_REPOSITORIO_CRIACAO_MODELOS: ${{ secrets.DISCORD_REPOSITORIO_CRIACAO_MODELOS }}
+          DISCORD_REPOSITORIO_FILOSOFIA: ${{ secrets.DISCORD_REPOSITORIO_FILOSOFIA }}
+          DISCORD_REPOSITORIO_POO: ${{ secrets.DISCORD_REPOSITORIO_POO }}
+          DISCORD_REPOSITORIO_SEGURANCA: ${{ secrets.DISCORD_REPOSITORIO_SEGURANCA }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       - run: node alerta_disc_geral.js
         env:
           CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}

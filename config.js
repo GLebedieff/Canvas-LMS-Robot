@@ -15,6 +15,12 @@ const ASSIGNMENTS_DB_ID = process.env.NOTION_ASSIGNMENTS_DB_ID;
 // Adicionado para suportar a sincronização de materiais:
 const NOTION_MATERIAIS_AULA_DB_ID = process.env.NOTION_MATERIAIS_AULA_DB_ID;
 
+// Planner Semanal
+const NOTION_HORARIO_DB_ID = process.env.NOTION_HORARIO_DB_ID;
+const NOTION_PLANNER_DB_ID = process.env.NOTION_PLANNER_DB_ID;
+const NOTION_TODO_DB_ID = process.env.NOTION_TODO_DB_ID;
+const NOTION_ATIVIDADES_DB_ID = process.env.NOTION_ATIVIDADES_DB_ID;
+
 // Webhooks
 const WEBHOOKS_ATIVIDADES = {
     '62337': process.env.DISCORD_ATIVIDADE_FILOSOFIA,
@@ -42,6 +48,10 @@ module.exports = {
     COURSES_DB_ID,
     ASSIGNMENTS_DB_ID,
     NOTION_MATERIAIS_AULA_DB_ID,
+    NOTION_HORARIO_DB_ID,
+    NOTION_PLANNER_DB_ID,
+    NOTION_TODO_DB_ID,
+    NOTION_ATIVIDADES_DB_ID,
     WEBHOOKS_ATIVIDADES,
     WEBHOOKS_MATERIAIS
 };
