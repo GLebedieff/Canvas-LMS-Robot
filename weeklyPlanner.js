@@ -146,11 +146,17 @@ P3 (Média): Blocos divididos em: 20min Flashcards + 70min Resolução Canvas + 
 Filosofia (P4): 1 único bloco semanal (máx 1h) de leitura dinâmica e tarefas.
 
 # INSTRUÇÕES DE SAÍDA (OUTPUT)
-Passo 1: Gere uma tag <RASCUNHO_LOGICO> onde você analisa passo a passo os horários de saída de cada dia, calcula o horário exato de início em casa (Saída + 2h30min) e verifica quantas horas sobram até o Hard Stop das 21:30. Defina aqui quais matérias entram em quais dias baseando-se na Regra do Dia Oposto.
-Passo 2: Apresente o "Resumo de Entregas" em bullet points listando em quais dias as tarefas do Notion foram alocadas.
-Passo 3: Gere a Tabela Markdown final (otimizada para importação no Notion). Use estritamente as seguintes colunas:
-| Dia | Horário Início - Fim | Ambiente | Disciplina | Foco Específico (Canvas/Notion) | Metodologia (Ex: 30m Flashcards + Coding) | Status |
-Atenção: A coluna "Ambiente" deve conter apenas "PUCPR" (para aulas/monitorias), "Deslocamento/Descanso" (para as 2h30min pós-saída) ou "Casa" (para o estudo). A coluna "Status" deve ser preenchida com [ ].`;
+Passo 1: Gere uma tag <RASCUNHO_LOGICO> onde você analisa passo a passo os horários de saída de cada dia, calcula o horário exato de início em casa (Saída + 2h30min) e verifica quantas horas sobram até o Hard Stop das 21:30. Defina aqui quais matérias entram em quais dias baseando-se na Regra do Dia Oposto. Escreva todo esse raciocínio em formato de citação (iniciando TODAS as linhas do Passo 1 com "> ").
+Passo 2: Apresente o "Resumo de Entregas" em bullet points listando em quais dias as tarefas do Notion foram alocadas. (Use "- ")
+Passo 3: Gere a rotina da semana agrupada por dias usando Títulos e Listas de Tarefas (To-Do). Não use tabelas. Use ESTRITAMENTE a formatação abaixo como exemplo:
+# 📅 Segunda-feira
+## 🎓 PUCPR (07:50 - 12:40)
+- [ ] Aula: Exp. Criativa
+## 🚌 Deslocamento (12:40 - 15:10)
+- [ ] Ônibus + Almoço
+## 🏠 Estudo em Casa (15:10 - 21:30)
+- [ ] Exp. Criativa - Foco: Canvas - Metodologia: Live Coding (2h)
+(Siga o mesmo formato para todos os dias. O uso de "#", "##" e "- [ ]" é OBRIGATÓRIO.)`;
 
     console.log('🤖 Enviando prompt para a API do Groq (Llama 3)...');
     try {
@@ -172,38 +178,92 @@ Atenção: A coluna "Ambiente" deve conter apenas "PUCPR" (para aulas/monitorias
     }
 }
 
-async function dividirEInserirNoNotion(texto, parentId) {
-    const LIMITE_CARACTERES = 2000;
-    
-    // Divide o texto em linhas, garantindo que não quebre blocos no meio desnecessariamente
-    const blocos = texto.split('\n\n'); 
-    let buffer = '';
-    const textBlocks = [];
+function parseMarkdownToNotionBlocks(markdownText) {
+    const lines = markdownText.split('\n');
+    const blocks = [];
 
-    for (let bloco of blocos) {
-        if (buffer.length + bloco.length > LIMITE_CARACTERES) {
-            textBlocks.push(buffer);
-            buffer = bloco + '\n\n';
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+        if (!line) continue;
+        
+        let type = 'paragraph';
+        let textContent = line;
+        let color = 'default';
+        let isTodo = false;
+        let isChecked = false;
+        
+        if (line.startsWith('# ')) {
+            type = 'heading_1';
+            textContent = line.substring(2).trim();
+            color = 'blue_background';
+        } else if (line.startsWith('## ')) {
+            type = 'heading_2';
+            textContent = line.substring(3).trim();
+            color = 'blue';
+        } else if (line.startsWith('### ')) {
+            type = 'heading_3';
+            textContent = line.substring(4).trim();
+        } else if (line.startsWith('- [ ] ')) {
+            type = 'to_do';
+            textContent = line.substring(6).trim();
+            isTodo = true;
+            isChecked = false;
+        } else if (line.startsWith('- [x] ') || line.startsWith('- [X] ')) {
+            type = 'to_do';
+            textContent = line.substring(6).trim();
+            isTodo = true;
+            isChecked = true;
+        } else if (line.startsWith('- ') || line.startsWith('* ')) {
+            type = 'bulleted_list_item';
+            textContent = line.substring(2).trim();
+        } else if (line.startsWith('> ')) {
+            type = 'quote';
+            textContent = line.substring(2).trim();
+        }
+        
+        // Limita o texto a 2000 caracteres (limite do Notion)
+        if (textContent.length > 2000) {
+            textContent = textContent.substring(0, 1997) + '...';
+        }
+        
+        const block = {
+            object: 'block',
+            type: type
+        };
+        
+        if (type === 'to_do') {
+            block[type] = {
+                rich_text: [{ type: 'text', text: { content: textContent } }],
+                checked: isChecked
+            };
+        } else if (type === 'heading_1' || type === 'heading_2') {
+            block[type] = {
+                rich_text: [{ type: 'text', text: { content: textContent } }],
+                color: color
+            };
         } else {
-            buffer += bloco + '\n\n';
+            block[type] = {
+                rich_text: [{ type: 'text', text: { content: textContent } }]
+            };
         }
+        
+        blocks.push(block);
     }
-    if (buffer.trim()) textBlocks.push(buffer);
+    return blocks;
+}
 
-    const children = textBlocks.map(tb => ({
-        object: 'block',
-        type: 'paragraph',
-        paragraph: {
-            rich_text: [{ type: 'text', text: { content: tb.trim() } }]
-        }
-    }));
-
+async function inserirBlocosNoNotion(texto, parentId) {
+    const blocks = parseMarkdownToNotionBlocks(texto);
+    
     // O Notion API permite até 100 children blocks por chamada
-    // Como agrupamos por 2000 chars, dificilmente passará de 10 blocos.
-    await notion.blocks.children.append({
-        block_id: parentId,
-        children: children
-    });
+    const chunk = 100;
+    for (let i = 0; i < blocks.length; i += chunk) {
+        const childrenChunk = blocks.slice(i, i + chunk);
+        await notion.blocks.children.append({
+            block_id: parentId,
+            children: childrenChunk
+        });
+    }
 }
 
 async function enviarAlertaDiscord(titulo) {
@@ -260,7 +320,7 @@ async function executarPlanner() {
             }
         });
 
-        await dividirEInserirNoNotion(plannerMarkdown, novaPagina.id);
+        await inserirBlocosNoNotion(plannerMarkdown, novaPagina.id);
         
         console.log(`✅ Página do Planner criada no Notion com sucesso!`);
         
