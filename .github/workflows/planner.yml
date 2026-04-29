@@ -2,8 +2,8 @@ name: Daily Study Planner
 
 on:
   schedule:
-    # Roda diariamente às 6h da manhã (BRT = UTC-3, logo 09:00 UTC)
-    - cron: '0 9 * * *'
+    # Roda todo domingo às 19:00 BRT (UTC-3, logo 22:00 UTC)
+    - cron: '0 22 * * 0'
   workflow_dispatch:
 
 jobs:
@@ -17,6 +17,7 @@ jobs:
       - run: npm install
       - run: node index.js
         env:
+          RUN_PLANNER: "true"
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
           NOTION_ASSIGNMENTS_DB_ID: ${{ secrets.NOTION_ASSIGNMENTS_DB_ID }}

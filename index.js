@@ -9,8 +9,10 @@ async function main() {
     await sincronizarMateriais();
     await sincronizarTarefas();
 
-    // Executa o planejador semanal (gera roteiro + distribui to-dos)
-    await executarPlanner();
+    // Executa o planejador semanal (gera roteiro) apenas se acionado pelo planner.yml
+    if (process.env.RUN_PLANNER === "true") {
+        await executarPlanner();
+    }
 
     console.log('\n🏁 Rotina finalizada.');
 }

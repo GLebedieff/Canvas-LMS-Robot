@@ -1,50 +1,15 @@
 /**
  * weeklyPlanner.js
- * Planejador semanal autônomo — gera roteiro e distribui to-dos diários no Notion.
+ * Planejador semanal autônomo com IA (Groq) — gera roteiro e salva no Notion.
  */
 
-const { notion, canvas, COURSES_DB_ID } = require('./config');
-const { gerarConteudoEstudo, getTipoAtividade } = require('./studyContentGenerator');
-
-const NOTION_HORARIO_DB_ID = process.env.NOTION_HORARIO_DB_ID;
-const NOTION_PLANNER_DB_ID = process.env.NOTION_PLANNER_DB_ID;
-const NOTION_TODO_DB_ID = process.env.NOTION_TODO_DB_ID;
-const NOTION_ATIVIDADES_DB_ID = process.env.NOTION_ATIVIDADES_DB_ID;
-
-const PLANNER_TAG = '🤖';
+const { notion, ASSIGNMENTS_DB_ID, NOTION_PLANNER_DB_ID } = require('./config');
+const axios = require('axios');
 
 const DIAS_SEMANA_MAP = {
     0: 'Domingo', 1: 'Segunda', 2: 'Terça', 3: 'Quarta',
     4: 'Quinta', 5: 'Sexta', 6: 'Sábado'
 };
-
-const TODAS_MATERIAS = [
-    { nome: 'Experiência Criativa', courseId: '64033' },
-    { nome: 'Performance em Sistemas Ciberfísicos', courseId: '64035' },
-    { nome: 'Criação de Modelos de Soluções', courseId: '64032' },
-    { nome: 'Filosofia', courseId: '62337' },
-    { nome: 'Programação Orientada a Objetos', courseId: '64098' },
-    { nome: 'Segurança da Informação', courseId: '64034' }
-];
-
-const REVISAO_POR_DIA = {
-    'Segunda': TODAS_MATERIAS[0], 
-    'Terça': TODAS_MATERIAS[1],   
-    'Quarta': TODAS_MATERIAS[2],  
-    'Quinta': TODAS_MATERIAS[3],  
-    'Sexta': TODAS_MATERIAS[4],   
-    'Sábado': TODAS_MATERIAS[5],  
-    'Domingo': null               
-};
-
-// ===================== HELPERS =====================
-
-const delay = ms => new Promise(res => setTimeout(res, ms));
-
-function getHojeBRT() {
-    const now = new Date();
-    return new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-}
 
 function formatarData(date) {
     return `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -73,396 +38,234 @@ function getFimSemana(date) {
     return fim;
 }
 
-// ===================== NOTION: LER HORÁRIO =====================
+function getHojeBRT() {
+    const now = new Date();
+    return new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+}
 
-async function lerHorarioDoDia(diaSemana) {
-    if (!NOTION_HORARIO_DB_ID) return [];
+async function buscarTarefasPendentes() {
+    console.log('🔍 Buscando tarefas pendentes no Notion...');
     try {
         const res = await notion.databases.query({
-            database_id: NOTION_HORARIO_DB_ID,
-            filter: { property: 'Dia', select: { equals: diaSemana } }
+            database_id: ASSIGNMENTS_DB_ID,
+            filter: {
+                property: 'Done',
+                checkbox: { equals: false }
+            }
         });
-        return res.results.map(entry => {
-            const props = entry.properties;
-            const titleProp = Object.keys(props).find(k => props[k].type === 'title');
-            return {
-                materia: titleProp ? props[titleProp].title[0]?.plain_text : 'Sem nome',
-                inicio: props['Horário Início']?.rich_text?.[0]?.plain_text || '',
-                fim: props['Horário Fim']?.rich_text?.[0]?.plain_text || '',
-                tipo: props['Tipo']?.select?.name || 'Aula',
-                courseId: props['Course ID']?.rich_text?.[0]?.plain_text || ''
-            };
+        
+        const tarefas = res.results.map(page => {
+            const nomeProp = Object.keys(page.properties).find(k => page.properties[k].type === 'title');
+            const nome = nomeProp ? page.properties[nomeProp]?.title[0]?.plain_text : 'Tarefa sem nome';
+            const prazo = page.properties['Deadline']?.date?.start || null;
+            return { nome, prazo };
         });
+        
+        // Filtra as tarefas que tem prazo para essa semana (ou atrasadas)
+        const hoje = getHojeBRT();
+        const fimSemana = getFimSemana(hoje);
+        fimSemana.setHours(23, 59, 59, 999);
+        
+        const tarefasDaSemana = tarefas.filter(t => {
+            if (!t.prazo) return true; // Se não tem prazo, mas tá pendente, inclui
+            const dataPrazo = new Date(t.prazo);
+            return dataPrazo <= fimSemana;
+        });
+
+        if (tarefasDaSemana.length === 0) {
+            return "[Nenhuma tarefa pendente adicionada para esta semana.]";
+        }
+
+        return tarefasDaSemana.map(t => {
+            if (!t.prazo) return `- ${t.nome} - Sem prazo definido`;
+            const dataPrazo = new Date(t.prazo);
+            const diaSemana = DIAS_SEMANA_MAP[dataPrazo.getDay()];
+            return `- ${t.nome} - Prazo: ${diaSemana} ${dataPrazo.getHours().toString().padStart(2, '0')}:${dataPrazo.getMinutes().toString().padStart(2, '0')}`;
+        }).join('\n');
+
     } catch (error) {
-        console.log(`⚠️ Erro ao ler horário do Notion: ${error.message}`);
-        return [];
+        console.error('⚠️ Erro ao buscar tarefas do Notion:', error.message);
+        return "[Nenhuma tarefa adicionada devido a um erro de busca.]";
     }
 }
 
-// ===================== CANVAS: MATERIAIS E TAREFAS =====================
+async function gerarPlannerComGroq(tarefasTexto) {
+    if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY não configurada no ambiente.');
 
-async function buscarMateriaisRecentes(courseId) {
-    let arquivos = [];
-    const duasSemanasAtras = new Date();
-    duasSemanasAtras.setDate(duasSemanasAtras.getDate() - 14);
+    const prompt = `# CONTEXTO E PERSONA
+Você é um Especialista em Engenharia de Software, Gestão de Tempo de Alta Performance e Neurociência da Aprendizagem. Seu objetivo é converter meus inputs semanais em um planner semanal de estudo rígido (estilo ITA/IME), porém biologicamente sustentável. Você deve orquestrar minhas aulas, monitorias, tempo de deslocamento e tarefas pendentes em um cronograma impecável.
+
+# INPUTS DA SEMANA
+<GRADE_PRESENCIAL>
+Segunda: 07:50 - 12:40 Exp. Criativa
+Terça: 07:50 - 09:20 PSCF | 09:40 - 12:40 CMSC (Criação de Modelos)
+Quarta: 07:50 - 09:20 Filosofia | 09:40 - 11:10 POO | 11:10 - 12:40 PSCF
+Quinta: 07:50 - 11:10 Segurança da Informação | 11:10 - 12:40 Monitoria Modelagem
+Sexta: 07:50 - 09:20 Filosofia | 09:40 - 12:40 POO
+</GRADE_PRESENCIAL>
+
+<HORARIOS_DE_SAIDA>
+Segunda: 12:40
+Terça: 15:00 (devido à Monitoria BD)
+Quarta: 16:00 (devido à Monitoria BD)
+Quinta: 12:40
+Sexta: 12:40
+</HORARIOS_DE_SAIDA>
+
+<HORARIOS_MONITORIA_BD>
+Terça: 14:00 - 15:00
+Quarta: 14:00 - 16:00
+</HORARIOS_MONITORIA_BD>
+
+<TAREFAS_NOTION_CANVAS>
+${tarefasTexto}
+</TAREFAS_NOTION_CANVAS>
+
+# METAS DE ESTUDO EXTRACLASSE E PRIORIDADES
+P1 (MÁXIMA): Experiência Criativa (Meta: 4h/semana)
+P2 (ALTA): POO (Meta: 3h a 4h/semana)
+P3 (MÉDIA): Seg. da Informação, Criação de Modelos, PSCF (Meta: 2h/semana cada)
+P4 (BAIXA): Filosofia (Meta: 1h/semana)
+
+# REGRAS RÍGIDAS (HARD CONSTRAINTS)
+A Lei do Dia Oposto: É terminantemente proibido alocar estudo extraclasse de uma matéria no mesmo dia de sua aula presencial.
+Exceção: O estudo de POO é permitido durante a Monitoria de BD (mesmo se houver aula de POO no dia).
+Monitoria Estratégica: Os horários definidos em <HORARIOS_MONITORIA_BD> devem ser alocados EXCLUSIVAMENTE para POO (30min Flashcards + Restante Coding).
+A Regra do Deslocamento e Jantar: O primeiro bloco de estudo em casa DEVE iniciar exatamente no horário de Saída da PUCPR + 2 horas. Este intervalo de 2h é blindado (ônibus + alimentação).
+Limite de Saúde Mental (Hard Stop):
+Encerramento ABSOLUTO de atividades cognitivas às 21:30. Nenhuma tarefa pode ultrapassar esse horário.
+Se o tempo entre a "Chegada em casa" e as "21:30" não permitir 2 blocos completos de 2h, aloque apenas 1 bloco ou reduza o tempo do bloco de forma proporcional. O que sobrar vai para o Domingo.
+Intervalo obrigatório de 10 min a cada hora estudada.
+Sistema de Gatilho (Notion): As entregas listadas em <TAREFAS_NOTION_CANVAS> têm prioridade. Se houver conflito, o estudo teórico da matéria perde espaço para a execução da tarefa daquela matéria.
+Domingo QG (08:00 - 15:00): Exclusivo para: Revisão Global, execução de tarefas que não couberam nos dias da semana devido ao limite das 21:30, e 1 hora de almoço obrigatória (12:00 - 13:00).
+
+# METODOLOGIA DE ESTUDO POR MATÉRIA (MICRO-TAREFAS)
+Exp. Criativa: Blocos de 2h (Deep Work 100% Coding/Projeto).
+POO: Blocos focados em: 30min Flashcards + Restante Live Coding.
+P3 (Média): Blocos divididos em: 20min Flashcards + 70min Resolução Canvas + Restante Cópia Ativa.
+Filosofia (P4): 1 único bloco semanal (máx 1h) de leitura dinâmica e tarefas.
+
+# INSTRUÇÕES DE SAÍDA (OUTPUT)
+Passo 1: Gere uma tag <RASCUNHO_LOGICO> onde você analisa passo a passo os horários de saída de cada dia, calcula o horário exato de início em casa (Saída + 2h30min) e verifica quantas horas sobram até o Hard Stop das 21:30. Defina aqui quais matérias entram em quais dias baseando-se na Regra do Dia Oposto.
+Passo 2: Apresente o "Resumo de Entregas" em bullet points listando em quais dias as tarefas do Notion foram alocadas.
+Passo 3: Gere a Tabela Markdown final (otimizada para importação no Notion). Use estritamente as seguintes colunas:
+| Dia | Horário Início - Fim | Ambiente | Disciplina | Foco Específico (Canvas/Notion) | Metodologia (Ex: 30m Flashcards + Coding) | Status |
+Atenção: A coluna "Ambiente" deve conter apenas "PUCPR" (para aulas/monitorias), "Deslocamento/Descanso" (para as 2h30min pós-saída) ou "Casa" (para o estudo). A coluna "Status" deve ser preenchida com [ ].`;
+
+    console.log('🤖 Enviando prompt para a API do Groq (Llama 3)...');
+    try {
+        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+            model: 'llama-3.3-70b-versatile',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.5
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data.choices[0].message.content;
+    } catch (e) {
+        console.error('❌ Erro na API do Groq:', e.response?.data || e.message);
+        throw e;
+    }
+}
+
+async function dividirEInserirNoNotion(texto, parentId) {
+    const LIMITE_CARACTERES = 2000;
+    
+    // Divide o texto em linhas, garantindo que não quebre blocos no meio desnecessariamente
+    const blocos = texto.split('\n\n'); 
+    let buffer = '';
+    const textBlocks = [];
+
+    for (let bloco of blocos) {
+        if (buffer.length + bloco.length > LIMITE_CARACTERES) {
+            textBlocks.push(buffer);
+            buffer = bloco + '\n\n';
+        } else {
+            buffer += bloco + '\n\n';
+        }
+    }
+    if (buffer.trim()) textBlocks.push(buffer);
+
+    const children = textBlocks.map(tb => ({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+            rich_text: [{ type: 'text', text: { content: tb.trim() } }]
+        }
+    }));
+
+    // O Notion API permite até 100 children blocks por chamada
+    // Como agrupamos por 2000 chars, dificilmente passará de 10 blocos.
+    await notion.blocks.children.append({
+        block_id: parentId,
+        children: children
+    });
+}
+
+async function enviarAlertaDiscord(titulo) {
+    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+    if (!webhookUrl) return;
 
     try {
-        const res = await canvas.get(`/courses/${courseId}/files?sort=created_at&order=desc&per_page=30`);
-        if (res.data && res.data.length > 0) {
-            // Filtra os arquivos que foram criados nas últimas duas semanas
-            const recentes = res.data.filter(f => new Date(f.created_at) >= duasSemanasAtras);
-            arquivos = recentes.map(f => f.display_name);
-        }
-    } catch {
-        // silencioso
-    }
-
-    if (arquivos.length === 0) {
-        try {
-            const modRes = await canvas.get(`/courses/${courseId}/modules?include[]=items&per_page=50`);
-            const modulos = modRes.data || [];
-            
-            // Inverte para começar pelo módulo mais recente (final do curso)
-            const modulosInvertidos = [...modulos].reverse();
-            
-            // Como os itens dos módulos não retornam a data de criação na API padrão de lista,
-            // pegamos apenas os materiais do ÚLTIMO módulo ativo, que teoricamente são das últimas semanas.
-            if (modulosInvertidos.length > 0) {
-                const ultimoModulo = modulosInvertidos[0];
-                const items = (ultimoModulo.items || []).filter(i => 
-                    i.type === 'File' || i.type === 'Page' || i.type === 'ExternalUrl'
-                );
-                arquivos = items.slice(0, 10).map(i => i.title);
-            }
-        } catch (err) {}
-    }
-    return arquivos;
-}
-
-async function buscarTarefasVencendoProximosDias(dateAlvo) {
-    const dataAlvoInicio = new Date(dateAlvo);
-    dataAlvoInicio.setHours(0, 0, 0, 0);
-
-    const dataAlvoFim = new Date(dateAlvo);
-    dataAlvoFim.setDate(dataAlvoFim.getDate() + 3);
-    dataAlvoFim.setHours(23, 59, 59, 999);
-
-    const tarefasAgendadas = [];
-    for (const materia of TODAS_MATERIAS) {
-        try {
-            const res = await canvas.get(`/courses/${materia.courseId}/assignments?bucket=upcoming`);
-            for (const t of res.data) {
-                if (!t.due_at || t.has_submitted_submissions) continue;
-                const dueDate = new Date(t.due_at);
-                if (dueDate >= dataAlvoInicio && dueDate <= dataAlvoFim) {
-                    tarefasAgendadas.push({ nome: t.name, materia: materia.nome, vencimento: dueDate, courseId: materia.courseId });
-                }
-            }
-        } catch (e) {}
-    }
-    return tarefasAgendadas;
-}
-
-// ===================== GERAR ATIVIDADE E OBTER LINK =====================
-
-async function obterOuCriarPaginaAtividade(materiaRevisao, dataObj) {
-    const dataStrISO = formatarDataISO(dataObj);
-    
-    // Tentar buscar no BD de Atividades
-    if (NOTION_ATIVIDADES_DB_ID) {
-        try {
-            const res = await notion.databases.query({
-                database_id: NOTION_ATIVIDADES_DB_ID,
-                filter: {
-                    and: [
-                        { property: 'Data', date: { equals: dataStrISO } },
-                        { property: 'Nome', title: { contains: materiaRevisao.nome } }
-                    ]
-                }
-            });
-            if (res.results.length > 0) {
-                const tipoStr = res.results[0].properties['Tipo']?.select?.name || 'Atividade';
-                return { url: res.results[0].url, isNova: false, tipoStr, conteudoObj: null };
-            }
-        } catch (e) {
-            console.log(`⚠️ Erro ao buscar atividade no DB: ${e.message}`);
-        }
-    }
-
-    // Se não encontrou, gerar conteúdo via Gemini e criar a página
-    const materiais = await buscarMateriaisRecentes(materiaRevisao.courseId);
-    const conteudoObj = await gerarConteudoEstudo(materiaRevisao.nome, materiais);
-    
-    let url = null;
-    let tipoStr = conteudoObj.tipo === 'exercicio' ? 'Exercício Prático' : 'Flashcards';
-
-    if (NOTION_ATIVIDADES_DB_ID) {
-        const filhos = [];
-        
-        if (conteudoObj.tipo === 'exercicio' && conteudoObj.exercicio) {
-            const ex = conteudoObj.exercicio;
-            filhos.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: ex.titulo || 'Exercício' } }] } });
-            filhos.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: ex.cenario || '' } }] } });
-            filhos.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: 'Requisitos' } }] } });
-            for (const req of (ex.requisitos || [])) {
-                filhos.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: req } }] } });
-            }
-            filhos.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: 'Passos Sugeridos' } }] } });
-            for (const passo of (ex.passos || [])) {
-                filhos.push({ object: 'block', type: 'numbered_list_item', numbered_list_item: { rich_text: [{ type: 'text', text: { content: passo } }] } });
-            }
-        } else {
-            const cards = conteudoObj.flashcards || [];
-            for (const card of cards) {
-                filhos.push({
-                    object: 'block', type: 'toggle',
-                    toggle: {
-                        rich_text: [{ type: 'text', text: { content: `Q: ${card.frente}` } }],
-                        children: [{ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: `R: ${card.verso}` } }] } }]
-                    }
-                });
-            }
-        }
-
-        let props = {
-            'Nome': { title: [{ text: { content: `Atividade: ${materiaRevisao.nome}` } }] },
-            'Tipo': { select: { name: tipoStr } },
-            'Data': { date: { start: dataStrISO } }
-        };
-
-        // Tenta achar o ID da página da matéria no banco de cursos para fazer a Relation
-        try {
-            if (COURSES_DB_ID) {
-                const resC = await notion.databases.query({
-                    database_id: COURSES_DB_ID,
-                    filter: { property: 'Course Name', title: { contains: materiaRevisao.nome } }
-                });
-                if (resC.results.length > 0) {
-                    props['Matéria'] = { relation: [{ id: resC.results[0].id }] };
-                }
-            }
-        } catch (e) {
-            console.log('⚠️ Erro ao vincular relação da Matéria. Ignorando campo.', e.message);
-        }
-
-        try {
-            const resCreate = await notion.pages.create({
-                parent: { database_id: NOTION_ATIVIDADES_DB_ID },
-                properties: props,
-                children: filhos
-            });
-            url = resCreate.url;
-            console.log(`✅ Página de atividade criada: ${url}`);
-        } catch (e) {
-            console.log(`⚠️ Erro ao criar página no DB Atividades: ${e.message}`);
-        }
-    }
-
-    return { url, isNova: true, tipoStr, conteudoObj };
-}
-
-// ===================== GERAR ROTEIRO DO DIA =====================
-
-async function gerarRoteiroDoDia(hoje) {
-    const diaSemana = DIAS_SEMANA_MAP[hoje.getDay()];
-    const ehFimDeSemana = hoje.getDay() === 0 || hoje.getDay() === 6;
-
-    console.log(`\n📅 Analisando roteiro para: ${diaSemana} (${formatarData(hoje)})`);
-
-    const horarioDoDia = ehFimDeSemana ? [] : await lerHorarioDoDia(diaSemana);
-    const aulas = horarioDoDia.filter(h => h.tipo === 'Aula');
-    const monitorias = horarioDoDia.filter(h => h.tipo === 'Monitoria');
-
-    const materiaRevisao = REVISAO_POR_DIA[diaSemana];
-    let atividadeData = null;
-    
-    if (materiaRevisao) {
-        atividadeData = await obterOuCriarPaginaAtividade(materiaRevisao, hoje);
-        atividadeData.materia = materiaRevisao.nome;
-    }
-
-    const tarefas = await buscarTarefasVencendoProximosDias(hoje);
-
-    return { diaSemana, aulas, monitorias, atividadeData, ehFimDeSemana, tarefas };
-}
-
-// ===================== NOTION: TO-DO (LISTA DE TAREFAS) =====================
-
-async function descobrirPropriedadesToDo() {
-    const db = await notion.databases.retrieve({ database_id: NOTION_TODO_DB_ID });
-    let titleProp = null, checkboxProp = null, dateProp = null;
-    for (const [name, prop] of Object.entries(db.properties)) {
-        if (prop.type === 'title') titleProp = name;
-        if (prop.type === 'checkbox') checkboxProp = name;
-        if (prop.type === 'date') dateProp = name;
-    }
-    return { titleProp, checkboxProp, dateProp };
-}
-
-async function limparTodosDoPlanner() {
-    console.log('\n🗑️ Limpando to-dos do planner anterior...');
-    const { titleProp } = await descobrirPropriedadesToDo();
-    if (!titleProp) return;
-
-    const res = await notion.databases.query({
-        database_id: NOTION_TODO_DB_ID,
-        filter: { property: titleProp, title: { starts_with: PLANNER_TAG } }
-    });
-
-    let removidos = 0;
-    for (const page of res.results) {
-        try { await notion.pages.update({ page_id: page.id, archived: true }); removidos++; } catch (err) {}
-    }
-    console.log(`✅ ${removidos} to-dos do planner removidos.`);
-}
-
-async function criarToDo(texto, data, url = null) {
-    const { titleProp, checkboxProp, dateProp } = await descobrirPropriedadesToDo();
-    const properties = {};
-    if (titleProp) properties[titleProp] = { title: [{ text: { content: `${PLANNER_TAG} ${texto}` } }] };
-    if (checkboxProp) properties[checkboxProp] = { checkbox: false };
-    if (dateProp) properties[dateProp] = { date: { start: formatarDataISO(data) } };
-
-    const payload = { parent: { database_id: NOTION_TODO_DB_ID }, properties };
-    
-    // Se existir URL, adicionamos no corpo (children) do To-Do para acesso rápido
-    if (url) {
-        payload.children = [{
-            object: 'block', type: 'bookmark', bookmark: { url: url }
-        }];
-    }
-
-    await notion.pages.create(payload);
-}
-
-async function distribuirTodosDoDia() {
-    const hoje = getHojeBRT();
-    const roteiro = await gerarRoteiroDoDia(hoje);
-
-    console.log('\n📝 Criando to-dos do dia na Lista de Tarefas...');
-
-    for (const aula of roteiro.aulas) {
-        await criarToDo(`📚 Aula: ${aula.materia} (${aula.inicio}-${aula.fim})`, hoje);
-    }
-    for (const mon of roteiro.monitorias) {
-        await criarToDo(`🎓 Monitoria (${mon.inicio}-${mon.fim})`, hoje);
-    }
-
-    if (roteiro.atividadeData) {
-        const act = roteiro.atividadeData;
-        await criarToDo(`🎯 ${act.tipoStr}: ${act.materia} (2h alocadas)`, hoje, act.url);
-    }
-
-    for (const tarefa of roteiro.tarefas) {
-        await criarToDo(`✍️ Tarefa: ${tarefa.nome} [${tarefa.materia}] (Vence ${formatarData(tarefa.vencimento)}) (1h alocada)`, hoje);
-    }
-
-    console.log(`✅ To-dos do dia criados com sucesso!`);
-}
-
-// ===================== NOTION: PLANNER SEMANAL =====================
-
-async function gerarRoteiroSemanal() {
-    const hoje = getHojeBRT();
-    const inicio = getInicioSemana(hoje);
-    const fim = getFimSemana(hoje);
-    const titulo = `Semana ${formatarData(inicio)} - ${formatarData(fim)}`;
-
-    console.log(`\n📅 Gerando roteiro semanal: ${titulo}`);
-
-    const existente = await notion.databases.query({
-        database_id: NOTION_PLANNER_DB_ID,
-        filter: { property: 'Data Início', date: { equals: formatarDataISO(inicio) } }
-    });
-
-    if (existente.results.length > 0) {
-        console.log('📋 Roteiro desta semana já existe. Pulando geração.');
-        return;
-    }
-
-    const blocosDias = [];
-
-    for (let i = 0; i < 7; i++) {
-        const dia = new Date(inicio);
-        dia.setDate(inicio.getDate() + i);
-        const roteiro = await gerarRoteiroDoDia(dia);
-        const filhos = [];
-
-        if (roteiro.aulas.length > 0) {
-            filhos.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: '📚 Aulas do Dia' } }] } });
-            for (const a of roteiro.aulas) {
-                filhos.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: `${a.inicio}-${a.fim} — ${a.materia}` } }] } });
-            }
-        }
-        if (roteiro.monitorias.length > 0) {
-            for (const m of roteiro.monitorias) {
-                filhos.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: `🎓 Monitoria ${m.inicio}-${m.fim}` } }] } });
-            }
-        }
-        if (roteiro.tarefas.length > 0) {
-            filhos.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: `✍️ Trabalhar nas Tarefas` } }] } });
-            for (const t of roteiro.tarefas) {
-                filhos.push({ object: 'block', type: 'to_do', to_do: { rich_text: [{ type: 'text', text: { content: `${t.nome} [Vence em ${formatarData(t.vencimento)}]` } }] } });
-            }
-        }
-        if (roteiro.atividadeData) {
-            const act = roteiro.atividadeData;
-            
-            filhos.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: `📖 Passos de Estudo` } }] } });
-            filhos.push({ object: 'block', type: 'to_do', to_do: { rich_text: [{ type: 'text', text: { content: `Revisar os conteúdos de ${act.materia}` } }] } });
-            filhos.push({ object: 'block', type: 'to_do', to_do: { rich_text: [{ type: 'text', text: { content: `Fazer anotações sobre o conteúdo estudado` } }] } });
-
-            filhos.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: `🎯 Atividade do Dia` } }] } });
-            if (act.url) {
-                filhos.push({ object: 'block', type: 'bookmark', bookmark: { url: act.url } });
-            } else {
-                filhos.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: `(Falha ao linkar página de ${act.materia})` } }] } });
-            }
-        }
-        if (filhos.length === 0) {
-            filhos.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: 'Dia livre — descanse e recarregue! 🌟' } }] } });
-        }
-
-        blocosDias.push({
-            object: 'block', type: 'heading_2',
-            heading_2: { rich_text: [{ type: 'text', text: { content: `📋 ${roteiro.diaSemana} (${formatarData(dia)})` } }], is_toggleable: true, children: filhos }
+        await axios.post(webhookUrl, {
+            content: `🎯 **NOVO PLANNER GERADO** 🎯\n\nO planner semanal da **${titulo}** acabou de ser gerado e salvo no Notion! Confira para planejar seus estudos.`
         });
-        if (i < 6) blocosDias.push({ object: 'block', type: 'divider', divider: {} });
-        
-        // Atraso de 10 segundos entre a geração de cada dia para preservar a cota do Gemini
-        if (i < 6) {
-            console.log('⏳ Pausa de 10 segundos para preservar os limites de requisição da IA...');
-            await delay(10000);
-        }
+        console.log(`🚀 Notificação de planner enviada para o Discord.`);
+    } catch (err) {
+        console.error('❌ Erro ao enviar notificação de planner para o Discord:', err.message);
     }
-
-    await notion.pages.create({
-        parent: { database_id: NOTION_PLANNER_DB_ID },
-        properties: {
-            'Semana': { title: [{ text: { content: titulo } }] },
-            'Data Início': { date: { start: formatarDataISO(inicio) } },
-            'Status': { select: { name: 'Ativa' } }
-        },
-        children: blocosDias
-    });
-    console.log(`✅ Roteiro semanal criado: ${titulo}`);
 }
 
 async function executarPlanner() {
     try {
-        console.log('\n🗓️ Iniciando Planejador Semanal...');
-        if (!NOTION_TODO_DB_ID) {
-            console.log('⚠️ NOTION_TODO_DB_ID não configurado. Planner desativado.');
+        console.log('\n🗓️ Iniciando Geração do Planejador Semanal via Groq...');
+        if (!NOTION_PLANNER_DB_ID) {
+            console.log('⚠️ NOTION_PLANNER_DB_ID não configurado. Planner desativado.');
             return;
         }
 
         const hoje = getHojeBRT();
-        const diaSemana = hoje.getDay();
+        const inicio = getInicioSemana(hoje);
+        const fim = getFimSemana(hoje);
+        const titulo = `Semana ${formatarData(inicio)} - ${formatarData(fim)}`;
 
-        if (diaSemana === 1 && NOTION_PLANNER_DB_ID) await gerarRoteiroSemanal();
+        // Verifica se a página desta semana já existe
+        const existente = await notion.databases.query({
+            database_id: NOTION_PLANNER_DB_ID,
+            filter: { property: 'Data Início', date: { equals: formatarDataISO(inicio) } }
+        });
 
-        await limparTodosDoPlanner();
-        await distribuirTodosDoDia();
+        if (existente.results.length > 0) {
+            console.log(`📋 O planner da semana ${titulo} já existe no Notion. Para gerar novamente, delete a página ou desative esta verificação.`);
+            // Dependendo do fluxo, poderíamos atualizar, mas é mais seguro não sobrescrever.
+            // Para permitir geração manual várias vezes, comentaremos o early return ou avisaremos:
+            // return;
+        }
+
+        // Busca tarefas e gera o conteúdo da IA
+        const tarefasTexto = await buscarTarefasPendentes();
+        const plannerMarkdown = await gerarPlannerComGroq(tarefasTexto);
+
+        console.log('📝 Criando página no Notion...');
+        const novaPagina = await notion.pages.create({
+            parent: { database_id: NOTION_PLANNER_DB_ID },
+            properties: {
+                'Semana': { title: [{ text: { content: titulo + ` (${Date.now()})` } }] }, // Append Date.now() para não sobrepor títulos caso gere mais de uma vez manual
+                'Data Início': { date: { start: formatarDataISO(inicio) } },
+                'Status': { select: { name: 'Ativa' } }
+            }
+        });
+
+        await dividirEInserirNoNotion(plannerMarkdown, novaPagina.id);
+        
+        console.log(`✅ Página do Planner criada no Notion com sucesso!`);
+        
+        await enviarAlertaDiscord(titulo);
+
         console.log('\n✅ Planejador Semanal finalizado!');
     } catch (error) {
         console.error('❌ Erro no Planejador Semanal:', error.message);
