@@ -2,11 +2,12 @@ const axios = require('axios');
 const { WEBHOOKS_ATIVIDADES, WEBHOOKS_MATERIAIS } = require('./config');
 
 async function enviarTarefaAoDiscord(task, courseName, courseId, notionPageUrl) {
+    const cleanId = String(courseId).trim();
     // Busca a URL específica para essa matéria
-    const webhookUrl = WEBHOOKS_ATIVIDADES[courseId.toString()];
+    const webhookUrl = WEBHOOKS_ATIVIDADES[cleanId];
 
     if (!webhookUrl) {
-        console.log(`⚠️ Aviso: Sem canal de Discord configurado para a matéria ID ${courseId}`);
+        console.log(`⚠️ Aviso: Sem canal de Discord configurado para atividades da matéria ID '${cleanId}' (${courseName})`);
         return;
     }
 
@@ -32,11 +33,12 @@ async function enviarTarefaAoDiscord(task, courseName, courseId, notionPageUrl) 
 }
 
 async function enviarFicheiroAoDiscord(ficheiro, cursoNome, cursoId) {
+    const cleanId = String(cursoId).trim();
     // Busca a URL no dicionário de materiais
-    const webhookUrl = WEBHOOKS_MATERIAIS[cursoId.toString()];
+    const webhookUrl = WEBHOOKS_MATERIAIS[cleanId];
 
     if (!webhookUrl) {
-        console.log(`⚠️ Sem canal de materiais para: ${cursoNome}`);
+        console.log(`⚠️ Aviso: Sem canal de materiais para a matéria ID '${cleanId}' (${cursoNome})`);
         return;
     }
 

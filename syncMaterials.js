@@ -25,8 +25,37 @@ async function sincronizarMateriais() {
             const notionCoursePageId = curso.id; 
 
             if (!canvasCourseId) continue;
+            
+            const cleanCourseId = canvasCourseId.toString().trim();
 
-            console.log(`\n📚 Buscando materiais para: ${cursoNome} (ID: ${canvasCourseId})`);
+            console.log(`\n📚 Buscando materiais para: ${cursoNome} (ID: ${cleanCourseId})`);
+            
+            // Otimização: Buscar todos os materiais que já estão no Notion para esta matéria
+            let existingCanvasIds = new Set();
+            try {
+                let hasMoreNotion = true;
+                let nextCursor = undefined;
+                while (hasMoreNotion) {
+                    const notionQuery = await notion.databases.query({
+                        database_id: NOTION_MATERIAIS_AULA_DB_ID,
+                        filter: {
+                            property: 'Matéria',
+                            relation: { contains: notionCoursePageId }
+                        },
+                        start_cursor: nextCursor
+                    });
+                    
+                    for (const page of notionQuery.results) {
+                        const cid = page.properties['Canvas ID']?.rich_text?.[0]?.plain_text;
+                        if (cid) existingCanvasIds.add(cid);
+                    }
+                    
+                    hasMoreNotion = notionQuery.has_more;
+                    nextCursor = notionQuery.next_cursor;
+                }
+            } catch (notionErr) {
+                console.log(`⚠️ Erro ao buscar materiais existentes no Notion. Sincronização desta matéria pode ser lenta ou duplicar arquivos.`, notionErr.message);
+            }
 
             let page = 1;
             let temMais = true;
@@ -38,7 +67,7 @@ async function sincronizarMateriais() {
             // 1. Buscar pela aba de Arquivos
             try {
                 while (temMais) {
-                    const res = await canvas.get(`/courses/${canvasCourseId}/files?sort=created_at&order=desc&per_page=100&page=${page}`);
+                    const res = await canvas.get(`/courses/${cleanCourseId}/files?sort=created_at&order=desc&per_page=100&page=${page}`);
                     const ficheiros = res.data;
 
                     if (ficheiros.length === 0) {
@@ -68,7 +97,7 @@ async function sincronizarMateriais() {
                 let modulesHasMore = true;
                 
                 while (modulesHasMore) {
-                    const modRes = await canvas.get(`/courses/${canvasCourseId}/modules?include[]=items&per_page=100&page=${modulePage}`);
+                    const modRes = await canvas.get(`/courses/${cleanCourseId}/modules?include[]=items&per_page=100&page=${modulePage}`);
                     const modulos = modRes.data;
                     
                     if (modulos.length === 0) {
@@ -76,29 +105,28 @@ async function sincronizarMateriais() {
                         break;
                     }
                     
-                    // Pegamos File e ExternalUrl dos módulos
-                    const relevantItems = modulos.flatMap(m => m.items || []).filter(i => i.type === 'File' || i.type === 'ExternalUrl');
+                    // Pegamos File, ExternalUrl e Page dos módulos
+                    const relevantItems = modulos.flatMap(m => m.items || []).filter(i => i.type === 'File' || i.type === 'ExternalUrl' || i.type === 'Page');
                     
                     for (const item of relevantItems) {
                         if (item.type === 'File') {
                             try {
                                 const fileDetailRes = await canvas.get(item.url.replace('https://pucpr.instructure.com/api/v1', ''));
                                 const fileData = fileDetailRes.data;
-                                // Só adiciona se for um material novo e não estiver já na lista
-                                if (new Date(fileData.created_at) > limiteTempo && !todosFicheiros.some(f => f.id === fileData.id)) {
+                                // Adiciona todos os arquivos do módulo que não estão na lista ainda
+                                if (!todosFicheiros.some(f => f.id === fileData.id)) {
                                     todosFicheiros.push(fileData);
                                 }
                             } catch (fileErr) {
                                 // ignora erro de arquivo individual
                             }
-                        } else if (item.type === 'ExternalUrl') {
-                            // Para links externos, não temos created_at facilmente, 
-                            // então adicionamos um pseudo-arquivo se não existir na lista
+                        } else if (item.type === 'ExternalUrl' || item.type === 'Page') {
+                            const url = item.type === 'Page' ? item.html_url : item.external_url;
                             const pseudoFile = {
                                 id: `ext_${item.id}`,
                                 display_name: item.title,
-                                url: item.external_url,
-                                created_at: new Date().toISOString(), // Assumimos agora, o Notion verifica se já existe
+                                url: url,
+                                created_at: new Date().toISOString(), // Assumimos agora
                                 is_external: true
                             };
                             if (!todosFicheiros.some(f => f.id === pseudoFile.id)) {
@@ -119,16 +147,9 @@ async function sincronizarMateriais() {
 
             for (const ficheiro of todosFicheiros) {
                 try {
-                    // 3. Verificar se já existe no Notion
-                    const existingFile = await notion.databases.query({
-                        database_id: NOTION_MATERIAIS_AULA_DB_ID,
-                        filter: {
-                            property: 'Canvas ID',
-                            rich_text: { equals: ficheiro.id.toString() } 
-                        }
-                    });
-
-                    if (existingFile.results.length === 0) {
+                    // 3. Verificar se já existe no Notion (agora usamos o Set em memória)
+                    const fileIdStr = ficheiro.id.toString();
+                    if (!existingCanvasIds.has(fileIdStr)) {
                         console.log(`🆕 Novo material detectado: ${ficheiro.display_name}`);
 
                         // 4. Cria no Notion e manda para o Discord
@@ -136,16 +157,19 @@ async function sincronizarMateriais() {
                             parent: { database_id: NOTION_MATERIAIS_AULA_DB_ID },
                             properties: {
                                 'Nome': { title: [{ text: { content: ficheiro.display_name } }] },
-                                'Canvas ID': { rich_text: [{ text: { content: ficheiro.id.toString() } }] },
+                                'Canvas ID': { rich_text: [{ text: { content: fileIdStr } }] },
                                 'Link Canvas': { url: ficheiro.url },
                                 'Matéria': { relation: [{ id: notionCoursePageId }] },
                                 'Data de Upload': { date: { start: ficheiro.created_at } }
                             }
                         });
 
-                        await enviarFicheiroAoDiscord(ficheiro, cursoNome, canvasCourseId);
+                        // Atualiza o Set local para evitar duplicatas na mesma execução
+                        existingCanvasIds.add(fileIdStr);
+
+                        await enviarFicheiroAoDiscord(ficheiro, cursoNome, cleanCourseId);
                     } else {
-                        console.log(`⏭️ Arquivo ${ficheiro.display_name} já está no Notion. Pulando...`);
+                        // console.log(`⏭️ Arquivo ${ficheiro.display_name} já está no Notion. Pulando...`);
                     }
                 } catch (notionErr) {
                     console.log(`⚠️ Falha de conexão ao verificar/salvar o arquivo ${ficheiro.display_name} no Notion: ${notionErr.message}. Tentará novamente na próxima execução.`);
