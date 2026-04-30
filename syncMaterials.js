@@ -35,6 +35,7 @@ async function sincronizarMateriais() {
             // Limite de tempo de segurança: 24 horas (otimiza a busca mas garante que não vamos perder nada se o bot ficar offline por algumas horas)
             const limiteTempo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
+            // 1. Buscar pela aba de Arquivos
             try {
                 while (temMais) {
                     const res = await canvas.get(`/courses/${canvasCourseId}/files?sort=created_at&order=desc&per_page=100&page=${page}`);
@@ -57,46 +58,63 @@ async function sincronizarMateriais() {
                     }
                 }
             } catch (err) {
-                console.log(`⚠️ Aba 'Arquivos' bloqueada em ${cursoNome}. Tentando buscar através dos 'Módulos' (Fallback)...`);
+                console.log(`⚠️ Aba 'Arquivos' bloqueada ou inacessível em ${cursoNome}.`);
+            }
+            
+            // 2. Sempre buscar através dos 'Módulos' para garantir uma varredura completa
+            try {
+                console.log(`   🔍 Verificando módulos de ${cursoNome}...`);
+                let modulePage = 1;
+                let modulesHasMore = true;
                 
-                try {
-                    let modulePage = 1;
-                    let modulesHasMore = true;
+                while (modulesHasMore) {
+                    const modRes = await canvas.get(`/courses/${canvasCourseId}/modules?include[]=items&per_page=100&page=${modulePage}`);
+                    const modulos = modRes.data;
                     
-                    while (modulesHasMore) {
-                        const modRes = await canvas.get(`/courses/${canvasCourseId}/modules?include[]=items&per_page=100&page=${modulePage}`);
-                        const modulos = modRes.data;
-                        
-                        if (modulos.length === 0) {
-                            modulesHasMore = false;
-                            break;
-                        }
-                        
-                        const fileItems = modulos.flatMap(m => m.items || []).filter(i => i.type === 'File');
-                        
-                        for (const item of fileItems) {
+                    if (modulos.length === 0) {
+                        modulesHasMore = false;
+                        break;
+                    }
+                    
+                    // Pegamos File e ExternalUrl dos módulos
+                    const relevantItems = modulos.flatMap(m => m.items || []).filter(i => i.type === 'File' || i.type === 'ExternalUrl');
+                    
+                    for (const item of relevantItems) {
+                        if (item.type === 'File') {
                             try {
                                 const fileDetailRes = await canvas.get(item.url.replace('https://pucpr.instructure.com/api/v1', ''));
                                 const fileData = fileDetailRes.data;
-                                // Só adiciona se for um material novo
-                                if (new Date(fileData.created_at) > limiteTempo) {
+                                // Só adiciona se for um material novo e não estiver já na lista
+                                if (new Date(fileData.created_at) > limiteTempo && !todosFicheiros.some(f => f.id === fileData.id)) {
                                     todosFicheiros.push(fileData);
                                 }
                             } catch (fileErr) {
                                 // ignora erro de arquivo individual
                             }
-                        }
-                        
-                        if (modulos.length < 100) {
-                            modulesHasMore = false;
-                        } else {
-                            modulePage++;
+                        } else if (item.type === 'ExternalUrl') {
+                            // Para links externos, não temos created_at facilmente, 
+                            // então adicionamos um pseudo-arquivo se não existir na lista
+                            const pseudoFile = {
+                                id: `ext_${item.id}`,
+                                display_name: item.title,
+                                url: item.external_url,
+                                created_at: new Date().toISOString(), // Assumimos agora, o Notion verifica se já existe
+                                is_external: true
+                            };
+                            if (!todosFicheiros.some(f => f.id === pseudoFile.id)) {
+                                todosFicheiros.push(pseudoFile);
+                            }
                         }
                     }
-                } catch (fallbackErr) {
-                    console.log(`❌ Falha também ao buscar módulos de ${cursoNome}. Pulando matéria...`);
-                    continue;
+                    
+                    if (modulos.length < 100) {
+                        modulesHasMore = false;
+                    } else {
+                        modulePage++;
+                    }
                 }
+            } catch (fallbackErr) {
+                console.log(`❌ Falha ao buscar módulos de ${cursoNome}.`);
             }
 
             for (const ficheiro of todosFicheiros) {
