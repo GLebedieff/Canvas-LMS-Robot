@@ -57,7 +57,7 @@ async function sincronizarCursos() {
         let canvasPage = 1;
         
         while (true) {
-            const res = await canvas.get(`/courses?per_page=100&page=${canvasPage}`);
+            const res = await canvas.get(`/courses?include[]=term&per_page=100&page=${canvasPage}`);
             const courses = res.data;
             if (!courses || courses.length === 0) break;
             
@@ -72,9 +72,27 @@ async function sincronizarCursos() {
         console.log(`📊 Encontrados ${canvasCourses.length} cursos no Canvas. Sincronizando...`);
 
         const isConcluded = (course) => {
-            return course.concluded || 
-                   course.workflow_state === 'completed' || 
-                   (course.end_at && new Date(course.end_at) < new Date());
+            // 1. Verificar se o Canvas marcou explicitamente como concluído
+            if (course.concluded || course.workflow_state === 'completed') {
+                return true;
+            }
+            
+            // 2. Verificar a data de término do curso
+            if (course.end_at && new Date(course.end_at) < new Date()) {
+                return true;
+            }
+            
+            // 3. Verificar a data de término do termo/semestre (se disponível)
+            if (course.term && course.term.end_at && new Date(course.term.end_at) < new Date()) {
+                return true;
+            }
+            
+            // 4. Verificar o estado da matrícula do próprio usuário (ex: 'completed')
+            if (course.enrollments && course.enrollments.some(e => e.enrollment_state === 'completed' || e.enrollment_state === 'inactive')) {
+                return true;
+            }
+            
+            return false;
         };
 
         const canvasCourseIdsSet = new Set();
