@@ -34,7 +34,7 @@ async function sincronizarTarefas() {
             try {
                 canvasRes = await canvas.get(`/courses/${canvasCourseId}/assignments?include[]=submission`);
             } catch (err) {
-                console.log(`⚠️ Não foi possível acessar as tarefas de ${cursoNome} (talvez não haja permissão). Pulando...`);
+                console.log(`⚠️ Não foi possível acessar as tarefas de ${courseName} (talvez não haja permissão). Pulando...`);
                 continue;
             }
             const assignments = canvasRes.data;
