@@ -1,5 +1,4 @@
 const { notion, canvas, COURSES_DB_ID, ASSIGNMENTS_DB_ID } = require('./config');
-const { enviarTarefaAoDiscord } = require('./discordService');
 
 async function sincronizarTarefas() {
     try {
@@ -9,6 +8,15 @@ async function sincronizarTarefas() {
         const coursesRes = await notion.databases.query({ database_id: COURSES_DB_ID });
         
         for (const coursePage of coursesRes.results) {
+            // Se o curso estiver arquivado, pula
+            const status = coursePage.properties['Status']?.status?.name || 
+                           coursePage.properties['Status']?.select?.name || 
+                           (coursePage.properties['Arquivado']?.checkbox ? 'Arquivado' : 'Ativo');
+            
+            if (status === 'Arquivado') {
+                continue;
+            }
+
             const canvasCourseId = coursePage.properties['Course Code']?.number || 
                                    coursePage.properties['Course Code']?.rich_text?.[0]?.plain_text || 
                                    coursePage.properties['Course Code']?.title?.[0]?.plain_text;
@@ -75,8 +83,6 @@ async function sincronizarTarefas() {
                                 'URL': { url: task.html_url }
                             }
                         });
-                        const notionPageUrl = newNotionPage.url;
-                        await enviarTarefaAoDiscord(task, courseName, canvasCourseId, notionPageUrl);
                     } else {
                         const pageIdNotion = existingTask.results[0].id;
                         

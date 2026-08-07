@@ -15,43 +15,10 @@ const ASSIGNMENTS_DB_ID = process.env.NOTION_ASSIGNMENTS_DB_ID;
 // Adicionado para suportar a sincronização de materiais:
 const NOTION_MATERIAIS_AULA_DB_ID = process.env.NOTION_MATERIAIS_AULA_DB_ID;
 
-// Planner Semanal
-const NOTION_HORARIO_DB_ID = process.env.NOTION_HORARIO_DB_ID;
-const NOTION_PLANNER_DB_ID = process.env.NOTION_PLANNER_DB_ID;
-const NOTION_TODO_DB_ID = process.env.NOTION_TODO_DB_ID;
-const NOTION_ATIVIDADES_DB_ID = process.env.NOTION_ATIVIDADES_DB_ID;
-
-// Webhooks
-const WEBHOOKS_ATIVIDADES = {
-    '62337': process.env.DISCORD_ATIVIDADE_FILOSOFIA,
-    '64033': process.env.DISCORD_ATIVIDADE_EXP_CRIATIVA,
-    // Utilizando o fallback para tratar o caso de erro de digitação no .env original
-    '64034': process.env.DISCORD_ATIVIDADE_SEGURANCA || process.env.DISOCRD_ATIVIDADE_SEGURANCA,
-    '64098': process.env.DISCORD_ATIVIDADE_POO,
-    '64035': process.env.DISCORD_ATIVIDADE_PERFORMANCE,
-    '64032': process.env.DISCORD_ATIVIDADE_CRIACAO_MODELOS
-};
-
-const WEBHOOKS_MATERIAIS = {
-    '62337': process.env.DISCORD_REPOSITORIO_FILOSOFIA,
-    '64033': process.env.DISCORD_REPOSITORIO_EXP_CRIATIVA,
-    // Utilizando o fallback para tratar o caso de erro de digitação no .env original
-    '64034': process.env.DISCORD_REPOSITORIO_SEGURANCA || process.env.DISOCRD_REPOSITORIO_SEGURANCA,
-    '64098': process.env.DISCORD_REPOSITORIO_POO,
-    '64035': process.env.DISCORD_REPOSITORIO_PERFORMANCE,
-    '64032': process.env.DISCORD_REPOSITORIO_CRIACAO_MODELOS
-};
-
 module.exports = {
     notion,
     canvas,
     COURSES_DB_ID,
     ASSIGNMENTS_DB_ID,
-    NOTION_MATERIAIS_AULA_DB_ID,
-    NOTION_HORARIO_DB_ID,
-    NOTION_PLANNER_DB_ID,
-    NOTION_TODO_DB_ID,
-    NOTION_ATIVIDADES_DB_ID,
-    WEBHOOKS_ATIVIDADES,
-    WEBHOOKS_MATERIAIS
+    NOTION_MATERIAIS_AULA_DB_ID
 };

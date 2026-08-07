@@ -1,5 +1,4 @@
 const { notion, canvas, COURSES_DB_ID, NOTION_MATERIAIS_AULA_DB_ID } = require('./config');
-const { enviarFicheiroAoDiscord } = require('./discordService');
 
 async function sincronizarMateriais() {
     try {
@@ -14,6 +13,15 @@ async function sincronizarMateriais() {
         const cursos = await notion.databases.query({ database_id: COURSES_DB_ID });
 
         for (const curso of cursos.results) {
+            // Se o curso estiver arquivado, pula
+            const status = curso.properties['Status']?.status?.name || 
+                           curso.properties['Status']?.select?.name || 
+                           (curso.properties['Arquivado']?.checkbox ? 'Arquivado' : 'Ativo');
+            
+            if (status === 'Arquivado') {
+                continue;
+            }
+
             // Tenta pegar o ID do canvas de várias formas possíveis (mesma lógica das tarefas)
             const canvasCourseId = curso.properties['Course Code']?.number || 
                                    curso.properties['Course Code']?.rich_text?.[0]?.plain_text || 
@@ -152,7 +160,21 @@ async function sincronizarMateriais() {
                     if (!existingCanvasIds.has(fileIdStr)) {
                         console.log(`🆕 Novo material detectado: ${ficheiro.display_name}`);
 
-                        // 4. Cria no Notion e manda para o Discord
+                        // 4. Cria no Notion com visualização em PDF se for o caso
+                        const children = [];
+                        if (ficheiro.display_name && ficheiro.display_name.toLowerCase().endsWith('.pdf') && ficheiro.url) {
+                            children.push({
+                                object: 'block',
+                                type: 'pdf',
+                                pdf: {
+                                    type: 'external',
+                                    external: {
+                                        url: ficheiro.url
+                                    }
+                                }
+                            });
+                        }
+
                         await notion.pages.create({
                             parent: { database_id: NOTION_MATERIAIS_AULA_DB_ID },
                             properties: {
@@ -161,13 +183,12 @@ async function sincronizarMateriais() {
                                 'Link Canvas': { url: ficheiro.url },
                                 'Matéria': { relation: [{ id: notionCoursePageId }] },
                                 'Data de Upload': { date: { start: ficheiro.created_at } }
-                            }
+                            },
+                            children: children.length > 0 ? children : undefined
                         });
 
                         // Atualiza o Set local para evitar duplicatas na mesma execução
                         existingCanvasIds.add(fileIdStr);
-
-                        await enviarFicheiroAoDiscord(ficheiro, cursoNome, cleanCourseId);
                     } else {
                         // console.log(`⏭️ Arquivo ${ficheiro.display_name} já está no Notion. Pulando...`);
                     }
